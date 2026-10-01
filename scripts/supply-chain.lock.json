@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "xui_version": "v3.8.5",
+  "xui_commit": "7ef22f94c950ff09f0870e2295fa65ad5968742c",
+  "xray_version": "v26.6.27",
+  "hysteria_version": "2.12.3",
+  "acme_version": "3.1.6",
+  "acme_commit": "807da6498377ee5e0cf43a78091f46f12dc59a89",
+  "assets": {
+    "x-ui.sh": {
+      "url": "https://raw.githubusercontent.com/MHSanaei/3x-ui/7ef22f94c950ff09f0870e2295fa65ad5968742c/x-ui.sh",
+      "sha256": "7f64543f783b0939dbf803bb24b835c80edb04daca70dbcb3ecf69e2a5ce3ab5"
+    },
+    "x-ui.rc": {
+      "url": "https://raw.githubusercontent.com/MHSanaei/3x-ui/7ef22f94c950ff09f0870e2295fa65ad5968742c/x-ui.rc",
+      "sha256": "987847aecb523d911cacb465e98f0892a7a95b476311947cc6baad51dcb98a56"
+    },
+    "x-ui.service.debian": {
+      "url": "https://raw.githubusercontent.com/MHSanaei/3x-ui/7ef22f94c950ff09f0870e2295fa65ad5968742c/x-ui.service.debian",
+      "sha256": "513f84fd2be16e3eec41e61acdd72c32cc639715eb4105e6dd9dc5ff190e5aec"
+    },
+    "x-ui.service.arch": {
+      "url": "https://raw.githubusercontent.com/MHSanaei/3x-ui/7ef22f94c950ff09f0870e2295fa65ad5968742c/x-ui.service.arch",
+      "sha256": "4d55c7cdfd05cbdf1ed54b0d5fecdc79ca8fbe8d48fc7a1460db1d89c3762242"
+    },
+    "x-ui.service.rhel": {
+      "url": "https://raw.githubusercontent.com/MHSanaei/3x-ui/7ef22f94c950ff09f0870e2295fa65ad5968742c/x-ui.service.rhel",
+      "sha256": "8669748361612b2ee17f2d03ffc43520c91ef39b0cb343712608bfc965ab518c"
+    },
+    "acme.tar.gz": {
+      "url": "https://codeload.github.com/acmesh-official/acme.sh/tar.gz/807da6498377ee5e0cf43a78091f46f12dc59a89",
+      "sha256": "ddbe1bcbd1a44a2623a2af167ebdc678669e6e2eb396742f2d1d28e02dc14220"
+    },
+    "x-ui-linux-386.tar.gz": {
+      "url": "https://github.com/MHSanaei/3x-ui/releases/download/v3.8.5/x-ui-linux-386.tar.gz",
+      "sha256": "f13691655dc274479ebbdd1cba5eb32c978728df2457c0b73f9f687a0eca09ac"
+    },
+    "x-ui-linux-amd64.tar.gz": {
+      "url": "https://github.com/MHSanaei/3x-ui/releases/download/v3.8.5/x-ui-linux-amd64.tar.gz",
+      "sha256": "6a85c110a04a727613c933c54ae602b8d37dab8876c6e20a6d46623010dd9d3c"
+    },
+    "x-ui-linux-arm64.tar.gz": {
+      "url": "https://github.com/MHSanaei/3x-ui/releases/download/v3.8.5/x-ui-linux-arm64.tar.gz",
+      "sha256": "2dd601a32426fb19b0eafdffaead374a9cdb66be4dfb39407f9f50fa4e7234e7"
+    },
+    "x-ui-linux-armv5.tar.gz": {
+      "url": "https://github.com/MHSanaei/3x-ui/releases/download/v3.8.5/x-ui-linux-armv5.tar.gz",
+      "sha256": "fe90376169675d40f5e3e67364b1b157e38f16441c41b01023e20fc79a7c5d2d"
+    },
+    "x-ui-linux-armv6.tar.gz": {
+      "url": "https://github.com/MHSanaei/3x-ui/releases/download/v3.8.5/x-ui-linux-armv6.tar.gz",
+      "sha256": "b01518d413086caef719f29f7c81c15dbeec0939cc55a4bf63a1d4edcdb94dea"
+    },
+    "x-ui-linux-armv7.tar.gz": {
+      "url": "https://github.com/MHSanaei/3x-ui/releases/download/v3.8.5/x-ui-linux-armv7.tar.gz",
+      "sha256": "2f19d148b05611c3245f50cbad24b9bb13cf52754981ee2a4fc24cc332402473"
+    },
+    "x-ui-linux-s390x.tar.gz": {
+      "url": "https://github.com/MHSanaei/3x-ui/releases/download/v3.8.5/x-ui-linux-s390x.tar.gz",
+      "sha256": "f5fc7593c35c3135f7e905f77c727a2a5becea3880273255ab57a62430441148"
+    },
+    "hashes.txt": {
+      "url": "https://github.com/HyNetworks/hysteria/releases/download/app/v2.12.3/hashes.txt",
+      "sha256": "a06953ac984ece521b564dae9348bd652942f7ddc07f985707ea67ce54474ad9"
+    },
+    "hysteria-linux-amd64": {
+      "url": "https://github.com/HyNetworks/hysteria/releases/download/app/v2.12.3/hysteria-linux-amd64",
+      "sha256": "8c7a68a906998b747a0db87586e364f995fbfddb95693ae6e2fdb68a6e920d3e"
+    },
+    "hysteria-linux-arm64": {
+      "url": "https://github.com/HyNetworks/hysteria/releases/download/app/v2.12.3/hysteria-linux-arm64",
+      "sha256": "c8dc653c3ba0a28d29a26b8fa52d2086f27c0927afddce95c09965e7174e78b0"
+    },
+    "Xray-linux-32.zip": {
+      "url": "https://github.com/XTLS/Xray-core/releases/download/v26.6.27/Xray-linux-32.zip",
+      "sha256": "a30a7bc601ca4be80675ab862cbeae4cadb0bc3242ffb687fb6865b67b8c4e8f"
+    },
+    "Xray-linux-64.zip": {
+      "url": "https://github.com/XTLS/Xray-core/releases/download/v26.6.27/Xray-linux-64.zip",
+      "sha256": "b3e5902d06d6282fe53cfa2fc426058b9aeaa429b2c812e20887cd47f26d08bf"
+    },
+    "Xray-linux-arm32-v5.zip": {
+      "url": "https://github.com/XTLS/Xray-core/releases/download/v26.6.27/Xray-linux-arm32-v5.zip",
+      "sha256": "cec3aad9095bba4fdfcbff6dedaa11bc98f945e35186a1f228efaaa28e99c8b2"
+    },
+    "Xray-linux-arm32-v6.zip": {
+      "url": "https://github.com/XTLS/Xray-core/releases/download/v26.6.27/Xray-linux-arm32-v6.zip",
+      "sha256": "d6a48164f73281e5213a27ee46cac4078df786acf15014c3bad1cb49d1bc1ec6"
+    },
+    "Xray-linux-arm32-v7a.zip": {
+      "url": "https://github.com/XTLS/Xray-core/releases/download/v26.6.27/Xray-linux-arm32-v7a.zip",
+      "sha256": "c77245cf9bfd6b8ae0fa8247cd65a3478f1951e9712fcde0f0dda4a31e2ac26c"
+    },
+    "Xray-linux-arm64-v8a.zip": {
+      "url": "https://github.com/XTLS/Xray-core/releases/download/v26.6.27/Xray-linux-arm64-v8a.zip",
+      "sha256": "13a251379bea366c2cf10363ad71e75734193d401f26f518bf0c25e5c8f8c931"
+    },
+    "Xray-linux-s390x.zip": {
+      "url": "https://github.com/XTLS/Xray-core/releases/download/v26.6.27/Xray-linux-s390x.zip",
+      "sha256": "be883d2b998b238421838fe29e8dd7b4b731e23def7712c3bbdac04e16319524"
+    },
+    "xui-install.sh": {
+      "url": "https://raw.githubusercontent.com/MHSanaei/3x-ui/7ef22f94c950ff09f0870e2295fa65ad5968742c/install.sh",
+      "sha256": "4e3fe7fe00ef8e904ce6a0e9c36fd8a0c7179fe5e786f23e31801aee84c6347d"
+    }
+  }
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 3X-UI со всеми протоколами одной командой — https://github.com/itsnotkubrick/3X-UI_KIT
 #
-# Установка:  bash <(curl -fsSL https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/main/scripts/3x-ui.sh)
+# Установка: bash ./scripts/3x-ui.sh из проверенного release bundle secure-v1.0.0 (см. README).
 #
 # Ставит официальную панель 3X-UI (версия закреплена ниже) её собственным
 # установщиком, получает сертификат Let's Encrypt на IP, создаёт подключения
@@ -11,6 +11,24 @@
 # Каждый протокол проверен настоящими клиентами — см. tests/matrix.
 
 set -Eeuo pipefail
+
+# Only run scripts from an operator-authenticated release bundle (see README).
+# This shell gate checks the helper before Python can execute it.
+supply_chain_bootstrap() {
+  local src file expected
+  src=$(readlink -f -- "${BASH_SOURCE[0]}") || { printf '%s\n' 'Cannot resolve bundle script.' >&2; return 1; }
+  [[ -f $src && $src != /dev/* && $src != /proc/* ]] || { printf '%s\n' 'Use an extracted verified release bundle, not curl | bash.' >&2; return 1; }
+  KIT_BUNDLE_ROOT=$(cd -- "$(dirname -- "$src")/.." && pwd -P)
+  [[ -f $KIT_BUNDLE_ROOT/SHA256SUMS && ! -L $KIT_BUNDLE_ROOT/SHA256SUMS && ! -L $KIT_BUNDLE_ROOT/scripts ]] || { printf '%s\n' 'Missing regular bundle SHA256SUMS.' >&2; return 1; }
+  for file in 3x-ui.sh hysteria2.sh kit.sh kit-sub.py supply-chain.py supply-chain.lock.json; do
+    [[ -f $KIT_BUNDLE_ROOT/scripts/$file && ! -L $KIT_BUNDLE_ROOT/scripts/$file ]] || return 1
+    expected=$(awk -v f="scripts/$file" '$2 == f {n++; h=$1} END {if(n != 1 || length(h) != 64 || h ~ /[^0-9a-f]/) exit 1; print h}' "$KIT_BUNDLE_ROOT/SHA256SUMS") || return 1
+    [[ $(sha256sum "$KIT_BUNDLE_ROOT/scripts/$file" | cut -d ' ' -f1) == "$expected" ]] || { printf '%s\n' 'Bundle checksum mismatch.' >&2; return 1; }
+  done
+  (cd -- "$KIT_BUNDLE_ROOT" && sha256sum --check --strict --quiet SHA256SUMS) || return 1
+}
+supply_chain_bootstrap || exit 1
+sc() { python3 -I "$KIT_BUNDLE_ROOT/scripts/supply-chain.py" "$@"; }
 
 XUI_VERSION="v3.8.5"
 # Ядро Xray для панели. С 26.7.x клиенты на Mihomo и sing-box (Hiddify, FlClash,
@@ -48,6 +66,19 @@ trap 'die "Ошибка в строке $LINENO. Исправьте причин
 rand_str() { openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c "$1"; }
 port_busy() { ss -H -ln"${2:0:1}" "sport = :$1" 2>/dev/null | grep -q .; }
 
+xui_arch() {
+  case "$(uname -m)" in
+    x86_64|x64|amd64) echo amd64 ;;
+    i*86|x86) echo 386 ;;
+    armv8*|arm64|aarch64) echo arm64 ;;
+    armv7*|arm) echo armv7 ;;
+    armv6*) echo armv6 ;;
+    armv5*) echo armv5 ;;
+    s390x) echo s390x ;;
+    *) die "Неподдерживаемая архитектура." ;;
+  esac
+}
+
 public_ip() {
   local ip
   for u in https://api.ipify.org https://ifconfig.me/ip https://ipv4.icanhazip.com; do
@@ -77,11 +108,11 @@ sni_ok() {
 api() { # METHOD path [json]
   local url="$API/$2" out
   if [[ $1 == GET ]]; then
-    out=$(curl -fsSk -m 20 -H "Authorization: Bearer $TOKEN" "$url")
+    out=$(curl -fsSk -m 20 -H "Authorization: Bearer $TOKEN" "$url" 2>/dev/null) || die "Panel API transport failed"
   else
-    out=$(curl -fsSk -m 20 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X "$1" -d "$3" "$url")
+    out=$(curl -fsSk -m 20 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X "$1" -d "$3" "$url" 2>/dev/null) || die "Panel API transport failed"
   fi
-  [[ $(jq -r '.success' <<<"$out") == true ]] || die "Панель ответила ошибкой на $2: $(jq -r '.msg // .' <<<"$out" | head -c 300)"
+  [[ $(jq -r '.success' <<<"$out" 2>/dev/null) == true ]] || die "Panel API request failed"
   jq -c '.obj' <<<"$out"
 }
 
@@ -114,20 +145,178 @@ ART
   echo "  https://github.com/itsnotkubrick/3X-UI_KIT"
   echo "  ${D}it's not Kubrick. it's just a VPN.${N}"
   echo
-  echo "Ниже — данные для входа в панель и подключения."
+  echo "Данные для входа и подключения хранятся только в root-only файле."
+}
+
+# An upstream install-result.env is configuration, never code provenance.
+resume_verified_xui() {
+  # Reconstruct the authenticated adapters; never execute installed code to ask
+  # for its version. Recognition is read-only and precedes administrative work.
+  if ! (
+    umask 077
+    local tmp arch
+    tmp=$(mktemp -d) || exit 1
+    trap 'rm -rf -- "$tmp"' EXIT
+    arch=$(xui_arch) || exit 1
+    sc prepare-xui "$KIT_BUNDLE_ROOT" "$tmp" "$arch" >/dev/null || exit 1
+    sc prepare-xray "$KIT_BUNDLE_ROOT" "$tmp" "$arch" >/dev/null || exit 1
+    python3 -I - "$tmp" "$arch" /usr/local/x-ui /usr/bin/x-ui /etc/systemd/system/x-ui.service /root/.acme.sh 2>/dev/null <<'PY'
+import hashlib
+import pathlib
+import sys
+import tarfile
+
+stage, arch, panel, menu, service, acme = sys.argv[1:]
+stage, panel, menu, service, acme = map(pathlib.Path, (stage, panel, menu, service, acme))
+
+
+def regular(path):
+    if any(p.is_symlink() for p in (path, *path.parents)) or not path.is_file():
+        raise ValueError('unsafe or missing installed code')
+    return path
+
+
+def digest(stream):
+    result = hashlib.sha256()
+    for block in iter(lambda: stream.read(1024 * 1024), b''):
+        result.update(block)
+    return result.digest()
+
+
+def file_digest(path):
+    with regular(path).open('rb') as stream:
+        return digest(stream)
+
+
+hardened_menu = file_digest(stage / 'x-ui.sh')
+if any(file_digest(p) != hardened_menu for p in (menu, panel / 'x-ui.sh')):
+    raise ValueError('unrecognized or unhardened menu')
+units = {file_digest(stage / ('x-ui.service.' + distro)) for distro in ('debian', 'arch', 'rhel')}
+pinned_xray = file_digest(stage / 'xray')
+with tarfile.open(stage / ('x-ui-linux-' + arch + '.tar.gz')) as archive:
+    for member in archive:
+        if not member.isfile():
+            continue
+        name = pathlib.PurePosixPath(member.name).relative_to('x-ui').as_posix()
+        if '.service' in name:
+            with archive.extractfile(member) as stream:
+                units.add(digest(stream))
+        if not member.mode & 0o111 or name == 'x-ui.sh':
+            continue
+        installed_name = name
+        if arch in ('armv5', 'armv6', 'armv7'):
+            installed_name = name.replace('xray-linux-' + arch, 'xray-linux-arm32').replace('mtg-linux-' + arch, 'mtg-linux-arm')
+        with archive.extractfile(member) as stream:
+            allowed = {digest(stream)}
+        # Resume both before and after this KIT's authenticated core replacement.
+        if name.startswith('bin/xray-linux-'):
+            allowed.add(pinned_xray)
+        if file_digest(panel / installed_name) not in allowed:
+            raise ValueError('unrecognized panel or sidecar binary')
+if file_digest(service) not in units:
+    raise ValueError('unrecognized service code')
+
+# ACME installs these source files verbatim except for its documented Bash
+# shebang rewrite. Executable root-managed configuration/renewal hooks retain
+# their existing trust boundary; they are never used as provenance evidence.
+def acme_equal(installed, expected):
+    actual = regular(installed).read_bytes()
+    wanted = expected.read_bytes()
+    if actual == wanted:
+        return True
+    first, separator, body = actual.partition(b'\n')
+    return (separator and first in (b'#!/bin/bash', b'#!/usr/bin/bash') and
+            wanted.startswith(b'#!') and body == wanted.partition(b'\n')[2])
+
+source = stage / 'acme-source'
+for name in ('acme.sh', 'acme.sh.completion'):
+    if not acme_equal(acme / name, source / name):
+        raise ValueError('unrecognized or unhardened ACME')
+for folder in ('dnsapi', 'deploy', 'notify'):
+    installed = acme / folder
+    expected = source / folder
+    if installed.is_symlink() or not installed.is_dir():
+        raise ValueError('unsafe or missing ACME hooks')
+    if {p.name for p in installed.iterdir()} != {p.name for p in expected.iterdir()}:
+        raise ValueError('unrecognized ACME hooks')
+    for path in expected.iterdir():
+        if not acme_equal(installed / path.name, path):
+            raise ValueError('unrecognized ACME hook code')
+PY
+  ); then
+    die "Resume refused: installed code is not a recognized pinned, hardened release, or verification is unavailable. If verification is unavailable, restore Python/network access and retry without removing state. Migration: for unrecognized code, stop x-ui and ACME renewal jobs; privately back up /etc/x-ui, /root/.acme.sh and /root/cert; manually remove the old /usr/local/x-ui, /usr/bin/x-ui and ACME code plus stale install-result.env (do not execute the legacy menu/uninstaller); install a newly authenticated KIT bundle and restore reviewed data only. Deleting only install-result.env is not a migration."
+  fi
+}
+
+secure_xui_environment() {
+  [[ -d /etc/x-ui && ! -L /etc/x-ui && -f $XUI_ENV && ! -L $XUI_ENV ]] || die "Unsafe installer state path"
+  # Never bless a foreign-owned executable state file before sourcing it.
+  [[ $(stat -c '%u' /etc/x-ui) == 0 && $(stat -c '%u' "$XUI_ENV") == 0 ]] || die "Installer state is not root-owned"
+  install -d -o root -g root -m 0700 /etc/x-ui
+  chown root:root "$XUI_ENV"
+  chmod 0600 "$XUI_ENV"
+}
+
+write_install_result() {
+  (
+    set -e
+    umask 077
+    [[ ! -L $RESULT ]] || die "Unsafe result path"
+    local result_tmp
+    result_tmp=$(mktemp "${RESULT%/*}/.3x-ui-result.XXXXXXXX")
+    trap 'rm -f -- "$result_tmp"' EXIT
+    {
+      echo "3X-UI KIT (3X-UI $XUI_VERSION) — данные для входа (файл виден только root)"
+      echo
+      echo "Панель:  $panel_url"
+      echo "Логин:   $XUI_USERNAME"
+      echo "Пароль:  $XUI_PASSWORD"
+      echo
+      [[ $TRUSTED == yes ]] && { echo "Подписка ($NAME) — все протоколы одной ссылкой:"; echo "$SUB_URL"; echo; }
+      echo "Отдельные подключения ($NAME):"
+      echo "$links"
+    } >"$result_tmp"
+    chown root:root "$result_tmp"
+    chmod 0600 "$result_tmp"
+    mv -Tf -- "$result_tmp" "$RESULT"
+  )
+}
+
+print_install_summary() {
+  echo
+  echo "${G}${B}Готово! 3X-UI работает: ${#CREATED[@]} протоколов.${N}"
+  echo "${D}${CREATED[*]}${N}"
+  echo
+  # Passwords, bearer URLs, panel paths and QR codes never enter installer logs.
+  echo "Данные для входа и подключения сохранены только в ${B}$RESULT${N} (root:root, 0600)."
+  echo "Посмотреть их в приватном root-терминале: cat $RESULT"
+  if [[ -n $PIN && " ${CREATED[*]} " == *" TUIC "* ]]; then
+    warn "TUIC со своим сертификатом: в клиенте включите «Разрешить небезопасный» (allow insecure) — отпечаток TUIC-ссылки не передают."
+  fi
+  echo
+  echo "Дополнительные пользователи — одной командой, сразу во все протоколы, со своей подпиской:"
+  echo "  ${B}kit user add sasha --gb 50 --days 30${N}"
+  echo "  ${B}kit user list${N}     — кто сколько израсходовал и до какого числа"
 }
 
 main() {
   [[ $EUID -eq 0 ]] || die "Запустите от root: sudo -i, затем команду ещё раз."
   command -v systemctl >/dev/null || die "Нужен systemd."
+  [[ ! -L $RESULT && ! -L $XUI_ENV && ! -L /etc/x-ui ]] || die "Unsafe installer state path"
   if [[ -f $RESULT && -x /usr/local/x-ui/x-ui ]]; then
     die "3X-UI уже установлена этим скриптом. Управление: команда x-ui, данные для входа: cat $RESULT"
   fi
+  # Refuse legacy/interrupted code before package, TLS, service or state writes.
+  [[ ! -f $XUI_ENV ]] || resume_verified_xui
   # Панель удалили через меню x-ui, а наши файлы остались — убираем их и ставим заново.
   if [[ -f $RESULT ]]; then
     warn "Панель 3X-UI удалена, но остались файлы прошлой установки — убираю их."
     systemctl disable --now kit-sub >/dev/null 2>&1 || true
-    rm -rf /etc/systemd/system/kit-sub.service /usr/local/lib/kit-sub /etc/kit-sub /etc/kit /usr/local/bin/kit \
+    systemctl disable --now kit-sub-tls-sync.timer >/dev/null 2>&1 || true
+    systemctl stop kit-sub-tls-sync.service >/dev/null 2>&1 || true
+    rm -rf -- /etc/systemd/system/kit-sub.service /usr/local/lib/kit-sub /etc/kit-sub /etc/kit /usr/local/bin/kit \
+      /etc/systemd/system/kit-sub-tls-sync.service /etc/systemd/system/kit-sub-tls-sync.timer \
+      /usr/local/sbin/kit-sub-sync-tls \
       /etc/cron.d/kit-nginx-reload /etc/cron.d/kit-xui-menu "$RESULT"
     systemctl daemon-reload
     # Наш nginx держит 443 — без этого проверка порта ниже не пустит REALITY.
@@ -191,16 +380,18 @@ main() {
   TRUSTED=no
   [[ $PANEL_SSL == ip || $PANEL_SSL == custom ]] && TRUSTED=yes
   if [[ $PANEL_SSL == custom ]]; then
-    mkdir -p /root/cert/custom
-    install -m 644 "$ucert" /root/cert/custom/fullchain.pem
-    install -m 600 "$ukey" /root/cert/custom/privkey.pem
+    [[ ! -L /root/cert && ! -L /root/cert/custom ]] || die "Unsafe TLS source directory"
+    install -d -o root -g root -m 0700 /root/cert /root/cert/custom
+    install -o root -g root -m 0644 "$ucert" /root/cert/custom/fullchain.pem
+    install -o root -g root -m 0600 "$ukey" /root/cert/custom/privkey.pem
   fi
 
   say "Ставлю пакеты: curl, jq, openssl, qrencode, ufw"
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
-  apt-get install -y -qq curl jq openssl qrencode ca-certificates iproute2 ufw socat cron >/dev/null
+  apt-get install -y -qq curl jq openssl qrencode ca-certificates iproute2 ufw socat cron python3 >/dev/null
 
+  sc verify "$KIT_BUNDLE_ROOT"
   HOST=${HOST:-$(public_ip)}
   [[ -n $HOST ]] || die "Не удалось узнать внешний IP. Укажите его: --host 1.2.3.4"
 
@@ -229,26 +420,29 @@ main() {
   panel_user=$(rand_str 10)
   panel_pass=$(rand_str 20)
   if [[ -f $XUI_ENV ]]; then
-    say "3X-UI уже стоит после прошлого запуска — продолжаю с создания подключений"
+    say "Проверенная 3X-UI уже стоит после прошлого запуска — продолжаю с создания подключений"
   else
-  tmp=$(mktemp)
-  say "Ставлю 3X-UI $XUI_VERSION официальным установщиком (пара минут)"
-  curl -fsSL --retry 3 -o "$tmp" "https://raw.githubusercontent.com/$XUI_REPO/$XUI_VERSION/install.sh"
-  if ! XUI_NONINTERACTIVE=1 XUI_SSL_MODE="${PANEL_SSL/custom/none}" XUI_SERVER_IP="$HOST" \
+  tmp=$(mktemp -d)
+  say "Ставлю 3X-UI $XUI_VERSION: upstream installer и архив с закреплёнными SHA256"
+  ( trap 'rm -rf -- "$tmp"' EXIT
+    sc prepare-xui "$KIT_BUNDLE_ROOT" "$tmp" "$(xui_arch)" >/dev/null || exit 1
+    umask 077
+    [[ ! -L /var/log/3x-ui-install.log ]] || exit 1
+    install -o root -g root -m 0600 /dev/null /var/log/3x-ui-install.log || exit 1
+    XUI_NONINTERACTIVE=1 XUI_SSL_MODE="${PANEL_SSL/custom/none}" XUI_SERVER_IP="$HOST" \
       XUI_PANEL_PORT="$panel_port" XUI_WEB_BASE_PATH="$panel_path" \
-      XUI_USERNAME="$panel_user" XUI_PASSWORD="$panel_pass" \
-      bash "$tmp" "$XUI_VERSION" </dev/null >/var/log/3x-ui-install.log 2>&1; then
-    tail -20 /var/log/3x-ui-install.log >&2
-    die "Установщик 3X-UI завершился с ошибкой. Полный лог: /var/log/3x-ui-install.log"
-  fi
-  rm -f "$tmp"
+      XUI_USERNAME="$panel_user" XUI_PASSWORD="$panel_pass" XUI_DB_TYPE=sqlite \
+      XUI_MAIN_FOLDER=/usr/local/x-ui XUI_SERVICE=/etc/systemd/system HOME=/root SC_ASSETS="$tmp" \
+      env -u BASH_ENV -u ENV bash "$tmp/install-verified.sh" "$XUI_VERSION" </dev/null >/var/log/3x-ui-install.log 2>&1
+  ) || die "Проверка или установка 3X-UI не удалась. Лог root-only: /var/log/3x-ui-install.log"
   fi
   [[ -f $XUI_ENV ]] || die "Установщик не сохранил данные входа. Лог: /var/log/3x-ui-install.log"
 
   # Данные для входа — из файла, который пишет сам установщик.
+  secure_xui_environment
   # shellcheck disable=SC1090
   . "$XUI_ENV"
-  TOKEN=$XUI_API_TOKEN
+  TOKEN=${XUI_API_TOKEN:?Missing panel API token}
   # Панель может уже работать по HTTPS (сертификат ставится после установщика) — пробуем оба.
   local scheme
   for scheme in https http; do
@@ -276,19 +470,21 @@ main() {
   fi
 
   # --- ядро Xray, совместимое со всеми клиентами ---
-  local cur_core
-  cur_core=$(/usr/local/x-ui/bin/xray-linux-* version 2>/dev/null | awk 'NR==1 {print "v" $2}')
-  if [[ $cur_core != "$XRAY_CORE" ]]; then
-    say "Ставлю ядро Xray $XRAY_CORE (совместимо с Hiddify, Mihomo и другими клиентами)"
-    api POST "server/installXray/$XRAY_CORE" '{}' >/dev/null
-    for _ in $(seq 1 30); do
-      cur_core=$(/usr/local/x-ui/bin/xray-linux-* version 2>/dev/null | awk 'NR==1 {print "v" $2}')
-      [[ $cur_core == "$XRAY_CORE" ]] && break
-      sleep 2
-    done
-    [[ $cur_core == "$XRAY_CORE" ]] || warn "Не удалось сменить ядро Xray (сейчас $cur_core). Клиенты на Mihomo и sing-box могут не подключиться."
-  fi
-
+  local core_tmp core_binary core_arch core_name
+  core_arch=$(xui_arch); core_name=$core_arch
+  [[ $core_arch == armv* ]] && core_name=arm32
+  core_tmp=$(mktemp -d)
+  say "Ставлю проверенное ядро Xray $XRAY_CORE"
+  ( trap 'rm -rf -- "$core_tmp"' EXIT
+    core_binary=$(sc prepare-xray "$KIT_BUNDLE_ROOT" "$core_tmp" "$core_arch") || exit 1
+    systemctl stop x-ui
+    # If installation fails, bring the previously installed service back.
+    trap 'systemctl start x-ui >/dev/null 2>&1 || true; rm -rf -- "$core_tmp"' EXIT
+    install -m 755 "$core_binary" "/usr/local/x-ui/bin/xray-linux-$core_name.new" || exit 1
+    mv -f -- "/usr/local/x-ui/bin/xray-linux-$core_name.new" "/usr/local/x-ui/bin/xray-linux-$core_name" || exit 1
+    systemctl restart x-ui
+  ) || die "Не удалось установить проверенный Xray."
+  wait_panel
   # --- сертификат для протоколов с TLS ---
   setup_tls_cert
 
@@ -347,53 +543,9 @@ main() {
   AWG_LINKS=$(grep '^vpn://' <<<"$links" || true)
   # MTProto слушает localhost, а клиенты приходят через nginx на 443.
   [[ $SINGLE == yes ]] && links=$(sed "s/^\(tg:\/\/proxy?\)\(.*\)port=${INNER[mtproto]}/\1\2port=443/" <<<"$links")
-  umask 077
-  {
-    echo "3X-UI KIT (3X-UI $XUI_VERSION) — данные для входа (файл виден только root)"
-    echo
-    echo "Панель:  $panel_url"
-    echo "Логин:   $XUI_USERNAME"
-    echo "Пароль:  $XUI_PASSWORD"
-    echo
-    [[ $TRUSTED == yes ]] && { echo "Подписка ($NAME) — все протоколы одной ссылкой:"; echo "$SUB_URL"; echo; }
-    echo "Отдельные подключения ($NAME):"
-    echo "$links"
-  } >"$RESULT"
-
+  write_install_result
   kit_banner
-  echo
-  echo "${G}${B}Готово! 3X-UI работает: ${#CREATED[@]} протоколов.${N}"
-  echo "${D}${CREATED[*]}${N}"
-  echo
-  echo "Панель:  ${B}$panel_url${N}"
-  echo "Логин:   ${B}$XUI_USERNAME${N}"
-  echo "Пароль:  ${B}$XUI_PASSWORD${N}"
-  echo
-  if [[ $TRUSTED == yes ]]; then
-    echo "Подписка для ${B}$NAME${N} — все протоколы одной ссылкой. Вставьте её в Hiddify, v2rayN, Happ,"
-    echo "Clash Verge или FlClash: приложение само получит подходящий формат."
-    echo
-    echo "$SUB_URL"
-    echo
-    qrencode -t ANSIUTF8 -m 1 "$SUB_URL" || true
-    if [[ -n $AWG_LINKS ]]; then
-      echo
-      echo "AmneziaWG приходит по подписке в Clash Verge и FlClash; для AmneziaVPN — ссылки vpn:// в $RESULT."
-    fi
-  else
-    echo "Без сертификата подписка недоступна снаружи — вот ссылки по одной:"
-    echo
-    echo "$links"
-  fi
-  echo
-  if [[ -n $PIN && " ${CREATED[*]} " == *" TUIC "* ]]; then
-    warn "TUIC со своим сертификатом: в клиенте включите «Разрешить небезопасный» (allow insecure) — отпечаток TUIC-ссылки не передают."
-  fi
-  echo "Всё это сохранено в ${B}$RESULT${N}."
-  echo
-  echo "Дополнительные пользователи — одной командой, сразу во все протоколы, со своей подпиской:"
-  echo "  ${B}kit user add sasha --gb 50 --days 30${N}"
-  echo "  ${B}kit user list${N}     — кто сколько израсходовал и до какого числа"
+  print_install_summary
 }
 
 # ---------- сертификат ----------
@@ -409,7 +561,8 @@ setup_tls_cert() {
     # чтобы клиенты доверяли именно ему.
     CERT=/root/cert/self/fullchain.pem; KEY=/root/cert/self/privkey.pem
     if [[ ! -s $CERT ]]; then
-      mkdir -p /root/cert/self
+      [[ ! -L /root/cert && ! -L /root/cert/self && ! -L $CERT && ! -L $KEY ]] || die "Unsafe TLS source path"
+      install -d -o root -g root -m 0700 /root/cert /root/cert/self
       local san="DNS:$HOST"
       [[ $HOST =~ ^[0-9.]+$ ]] && san="IP:$HOST"
       openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout "$KEY" -out "$CERT" \
@@ -418,6 +571,13 @@ setup_tls_cert() {
     fi
     PIN=$(openssl x509 -in "$CERT" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr 'A-F' 'a-f')
   fi
+  # The publisher is root and uses owner DAC access, not a broad DAC capability.
+  [[ ! -L /root/cert && ! -L ${CERT%/*} ]] || die "Unsafe TLS source directory"
+  install -d -o root -g root -m 0700 /root/cert "${CERT%/*}"
+  [[ -f $CERT && ! -L $CERT && -f $KEY && ! -L $KEY ]] || die "Unsafe TLS source files"
+  chown root:root "$CERT" "$KEY"
+  chmod 0600 "$KEY"
+  chmod 0644 "$CERT"
 }
 
 tls_json() { # alpn(JSON-массив)
@@ -461,13 +621,13 @@ add_inbound() {
     sniffing: "{\"enabled\":true,\"destOverride\":[\"http\",\"tls\",\"quic\"],\"metadataOnly\":false,\"routeOnly\":false}",
     expiryTime: 0, total: 0}')
   local out
-  out=$(curl -sSk -m 20 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST -d "$body" "$API/inbounds/add")
+  out=$(curl -sSk -m 20 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST -d "$body" "$API/inbounds/add" 2>/dev/null) || die "Panel API transport failed"
   if [[ $(jq -r '.success' <<<"$out") != true ]] && grep -q 'Duplicate email' <<<"$out"; then
     # Клиент с таким именем остался от удалённого подключения — берём уникальное имя.
     body=$(jq -c --arg sfx "-$(openssl rand -hex 2)" '.settings |= (fromjson | .clients[0].email += $sfx | tojson)' <<<"$body")
-    out=$(curl -sSk -m 20 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST -d "$body" "$API/inbounds/add")
+    out=$(curl -sSk -m 20 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST -d "$body" "$API/inbounds/add" 2>/dev/null) || die "Panel API transport failed"
   fi
-  [[ $(jq -r '.success' <<<"$out") == true ]] || die "Панель не создала $remark: $(jq -r '.msg // .' <<<"$out" | head -c 300)"
+  [[ $(jq -r '.success' <<<"$out" 2>/dev/null) == true ]] || die "Panel inbound creation failed"
   CREATED+=("$remark"); open_port "$port" "$net"
 }
 
@@ -712,7 +872,6 @@ awg_attach() { # имя subId [лимит-байт] [срок-мс] [устро�
   done
 }
 
-KIT_CLI_URL="https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/main/scripts/kit.sh"
 
 install_kit_cli() {
   install -d -m 700 /etc/kit
@@ -725,28 +884,19 @@ install_kit_cli() {
     printf 'MTPROTO_INNER=%q\n' "${INNER[mtproto]}"
   } >/etc/kit/kit.env
   chmod 600 /etc/kit/kit.env
-  local d src=""
-  d=$(dirname "${BASH_SOURCE[0]}")
-  [[ -f $d/kit.sh && ${BASH_SOURCE[0]} != /dev/fd/* ]] && src=$d/kit.sh
-  if [[ -n $src ]]; then install -m 755 "$src" /usr/local/bin/kit
-  else curl -fsSL --retry 3 -o /usr/local/bin/kit "$KIT_CLI_URL" && chmod 755 /usr/local/bin/kit; fi
-  bash -n /usr/local/bin/kit || die "Команда kit скачалась повреждённой"
+  local bundle
+  bundle=$(sc persist "$KIT_BUNDLE_ROOT" /usr/local/lib/3x-ui-kit) || die "Не удалось сохранить проверенный bundle."
+  ln -sfn -- "$bundle/scripts/kit.sh" /usr/local/bin/kit
 }
 
-KIT_INSTALL_CMD="bash <(curl -fsSL https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/main/scripts/3x-ui.sh)"
+KIT_INSTALL_CMD="bash ./scripts/3x-ui.sh (из проверенного release bundle secure-v1.0.0; см. README)"
 
-# После «x-ui → Uninstall» меню подсказывает команду официального установщика —
-# меняем её на нашу. Только в echo: вызов установщика в «Update» не трогаем.
-# Меню обновляется вместе с панелью, поэтому раз в сутки подсказку правит cron.
+# Удаляем старую cron-подмену подсказки. Само меню теперь готовит verified adapter;
+# обновление компонентов через mutable upstream скрипты в нём отключено.
 brand_xui_menu() {
-  printf '%s\n' '/echo.*mhsanaei\/3x-ui\/[a-z]*\/install\.sh/ s#bash <(curl -Ls https://raw\.githubusercontent\.com/mhsanaei/3x-ui/[a-z]*/install\.sh)#'"$KIT_INSTALL_CMD"'#' \
-    >/etc/kit/xui-menu.sed
-  local f
-  for f in /usr/bin/x-ui /usr/local/x-ui/x-ui.sh; do
-    [[ -f $f ]] && sed -i -f /etc/kit/xui-menu.sed "$f"
-  done
-  echo '23 4 * * * root for f in /usr/bin/x-ui /usr/local/x-ui/x-ui.sh; do [ -f "$f" ] && sed -i -f /etc/kit/xui-menu.sed "$f"; done' \
-    >/etc/cron.d/kit-xui-menu
+  # The supply-chain adapter installs a matched, hardened upstream menu.
+  # Never restore a mutable-main command through cron or self-update.
+  rm -f /etc/cron.d/kit-xui-menu /etc/kit/xui-menu.sed
 }
 
 # ---------- всё на 443: nginx ----------
@@ -864,7 +1014,9 @@ $locs
 }
 NGX
   grep -q 'kit-stream.conf' /etc/nginx/nginx.conf || echo 'include /etc/nginx/kit-stream.conf;' >>/etc/nginx/nginx.conf
-  nginx -t >/tmp/nginx-test.log 2>&1 || { cat /tmp/nginx-test.log >&2; die "nginx не принял конфиг — лог выше."; }
+  [[ ! -L /var/log/kit-nginx-test.log ]] || die "Unsafe nginx diagnostic log"
+  install -o root -g root -m 0600 /dev/null /var/log/kit-nginx-test.log
+  nginx -t >/var/log/kit-nginx-test.log 2>&1 || die "nginx не принял конфиг. Лог root-only: /var/log/kit-nginx-test.log"
   systemctl enable nginx >/dev/null 2>&1
   systemctl restart nginx
   # Let's Encrypt на IP продлевается каждые несколько дней — nginx раз в сутки перечитывает сертификат.
@@ -910,62 +1062,210 @@ setup_subscription() {
   SUB_FETCH="$(if [[ $TRUSTED == yes ]]; then echo https; else echo http; fi)://$HOST:$SUB_PORT$SUB_PATH$SUBID"
 }
 
-KIT_SUB_URL="https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/main/scripts/kit-sub.py"
+
+install_kit_sub_tls_sync() {
+  [[ ! -L /etc/kit-sub/tls ]] || die "Unsafe kit-sub TLS directory"
+  install -d -o root -g kit-sub -m 0750 /etc/kit-sub/tls
+  local sources helper
+  sources=$(mktemp /etc/kit-sub/.tls-sources.XXXXXXXX)
+  jq -n --arg cert "$CERT" --arg key "$KEY" '{cert: $cert, key: $key}' >"$sources"
+  chown root:root "$sources"; chmod 0600 "$sources"
+  mv -Tf -- "$sources" /etc/kit-sub/tls-sources.json
+  helper=$(mktemp)
+  cat >"$helper" <<'HELPER'
+#!/bin/bash
+set -euo pipefail
+umask 077
+exec 2>/dev/null
+base=/etc/kit-sub/tls
+generation=
+link=
+published=no
+cleanup() {
+  local result=$?
+  [[ -z $link ]] || rm -f -- "$link"
+  if [[ $published != yes && -n $generation ]]; then rm -rf -- "$generation"; fi
+  if (( result != 0 )); then printf '%s\n' 'kit-sub: protected TLS sync failed'; fi
+  return "$result"
+}
+trap cleanup EXIT
+[[ $EUID == 0 && -d $base && ! -L $base ]]
+exec 9>"$base/.sync.lock"
+flock -n 9 || exit 0
+cert=$(jq -er '.cert | select(type == "string" and startswith("/") and (test("[\\r\\n]") | not))' /etc/kit-sub/tls-sources.json)
+key=$(jq -er '.key | select(type == "string" and startswith("/") and (test("[\\r\\n]") | not))' /etc/kit-sub/tls-sources.json)
+[[ -s $cert && -s $key ]]
+if [[ -L $base/current ]] && cmp -s -- "$cert" "$base/current/fullchain.pem" && cmp -s -- "$key" "$base/current/privkey.pem"; then
+  exit 0
+fi
+generation=$(mktemp -d "$base/gen.XXXXXXXXXX")
+install -o root -g kit-sub -m 0640 -- "$cert" "$generation/fullchain.pem"
+install -o root -g kit-sub -m 0640 -- "$key" "$generation/privkey.pem"
+# CPython validates the complete PEM chain and matching unencrypted key.
+# Staging paths are root-controlled, never the source subscription config.
+/usr/bin/python3 - "$generation/fullchain.pem" "$generation/privkey.pem" <<'PY'
+import ssl
+import sys
+ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(sys.argv[1], sys.argv[2])
+PY
+# If sources changed while staging, retry at the next timer tick.
+cmp -s -- "$cert" "$generation/fullchain.pem"
+cmp -s -- "$key" "$generation/privkey.pem"
+previous=$(readlink -- "$base/current" || true)
+chown root:kit-sub "$generation"
+chmod 0750 "$generation"
+link="$base/.current.${generation##*/}"
+ln -s -- "${generation##*/}" "$link"
+mv -Tf -- "$link" "$base/current"
+published=yes
+# Retain the current and previous complete pairs; bound on-disk generations.
+for old in "$base"/gen.*; do
+  [[ -d $old && ! -L $old && $old != "$generation" && ${old##*/} != "$previous" ]] || continue
+  rm -rf -- "$old"
+done
+HELPER
+  install -o root -g root -m 0700 "$helper" /usr/local/sbin/kit-sub-sync-tls
+  rm -f -- "$helper"
+  /usr/local/sbin/kit-sub-sync-tls || die "kit-sub TLS publication failed"
+  cat >/etc/systemd/system/kit-sub-tls-sync.service <<'UNIT'
+[Unit]
+Description=Publish protected kit-sub TLS copies
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/kit-sub-sync-tls
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/etc/kit-sub/tls
+PrivateTmp=true
+PrivateDevices=true
+PrivateNetwork=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=CAP_CHOWN
+TimeoutStartSec=30
+UNIT
+  cat >/etc/systemd/system/kit-sub-tls-sync.timer <<'UNIT'
+[Unit]
+Description=Detect renewed kit-sub TLS source files
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=kit-sub-tls-sync.service
+
+[Install]
+WantedBy=timers.target
+UNIT
+  chown root:root /etc/systemd/system/kit-sub-tls-sync.service /etc/systemd/system/kit-sub-tls-sync.timer
+  chmod 0644 /etc/systemd/system/kit-sub-tls-sync.service /etc/systemd/system/kit-sub-tls-sync.timer
+}
 
 install_kit_sub() {
+  local kp=$SUB_PORT
+  [[ $SINGLE == yes ]] && kp=${INNER[sub]}
+  [[ $kp =~ ^[0-9]{1,5}$ ]] && ((kp > 1023 && kp < 65536)) || die "Invalid unprivileged kit-sub port"
   say "Ставлю подписку с учётом приложения (kit-sub)"
   apt-get install -y -qq python3 python3-yaml >/dev/null
-  install -d -m 755 /usr/local/lib/kit-sub /etc/kit-sub
-  local src=${KIT_SUB_SRC:-}
-  if [[ -z $src ]]; then
-    local d; d=$(dirname "${BASH_SOURCE[0]}")
-    [[ -f $d/kit-sub.py && ${BASH_SOURCE[0]} != /dev/fd/* ]] && src=$d/kit-sub.py
+  # Refuse symlinked application roots before changing their ownership.
+  [[ ! -L /usr/local/lib/kit-sub && ! -L /etc/kit-sub ]] || die "Unsafe kit-sub directory"
+  getent group kit-sub >/dev/null || groupadd --system kit-sub
+  if ! getent passwd kit-sub >/dev/null; then
+    useradd --system --gid kit-sub --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin kit-sub
   fi
-  if [[ -n $src ]]; then install -m 644 "$src" /usr/local/lib/kit-sub/kit_sub.py
-  else curl -fsSL --retry 3 -o /usr/local/lib/kit-sub/kit_sub.py "$KIT_SUB_URL"; fi
-  python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" /usr/local/lib/kit-sub/kit_sub.py || die "kit-sub скачался повреждённым"
+  local ks_name ks_pass ks_uid ks_gid ks_gecos ks_home ks_shell ks_group ks_gpass ks_group_gid ks_members
+  IFS=: read -r ks_name ks_pass ks_uid ks_gid ks_gecos ks_home ks_shell < <(getent passwd kit-sub)
+  IFS=: read -r ks_group ks_gpass ks_group_gid ks_members < <(getent group kit-sub)
+  [[ $ks_uid =~ ^[0-9]+$ && $ks_uid != 0 && $ks_gid =~ ^[0-9]+$ && $ks_gid != 0 && $ks_gid == "$ks_group_gid" \
+     && $ks_home == /nonexistent && $ks_shell == /usr/sbin/nologin \
+     && $(id -G kit-sub) == "$ks_gid" && -z $ks_members ]] || die "Unsafe existing kit-sub identity"
+  install -d -o root -g root -m 0755 /usr/local/lib/kit-sub
+  install -d -o root -g kit-sub -m 0750 /etc/kit-sub
+  sc verify "$KIT_BUNDLE_ROOT"
+  install -o root -g root -m 0644 "$KIT_BUNDLE_ROOT/scripts/kit-sub.py" /usr/local/lib/kit-sub/kit_sub.py
+  python3 -I -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" /usr/local/lib/kit-sub/kit_sub.py || die "Некорректный kit-sub в bundle."
+  local ks_config
+  ks_config=$(mktemp /etc/kit-sub/.config.XXXXXXXX)
   if [[ $SINGLE == yes ]]; then
-    # За nginx: слушаем только localhost, TLS снимает nginx на 443.
+    # Only loopback HTTP behind nginx; nginx keeps its own root-only TLS key.
+    systemctl disable --now kit-sub-tls-sync.timer >/dev/null 2>&1 || true
+    systemctl stop kit-sub-tls-sync.service >/dev/null 2>&1 || true
+    systemctl stop kit-sub >/dev/null 2>&1 || true
+    # A plaintext-only daemon must not retain access to previous TLS key copies.
+    rm -rf -- /etc/kit-sub/tls
+    rm -f -- /etc/kit-sub/tls-sources.json
     jq -n --arg path "$SUB_PATH" --argjson port "${INNER[sub]}" --arg up "http://127.0.0.1:$SUB_INTERNAL" --arg host "$HOST" \
-      '{listen: "127.0.0.1", port: $port, path: $path, upstream: $up, host: $host}' >/etc/kit-sub/config.json
+      '{listen: "127.0.0.1", port: $port, path: $path, upstream: $up, host: $host}' >"$ks_config"
   else
-    jq -n --arg path "$SUB_PATH" --argjson port "$SUB_PORT" --arg up "http://127.0.0.1:$SUB_INTERNAL" \
-      --arg cert "$CERT" --arg key "$KEY" --arg host "$HOST" \
-      '{listen: "0.0.0.0", port: $port, path: $path, upstream: $up, cert: $cert, key: $key, host: $host}' >/etc/kit-sub/config.json
+    install_kit_sub_tls_sync
+    jq -n --arg path "$SUB_PATH" --argjson port "$SUB_PORT" --arg up "http://127.0.0.1:$SUB_INTERNAL" --arg host "$HOST" \
+      '{listen: "0.0.0.0", port: $port, path: $path, upstream: $up, host: $host,
+        cert: "/etc/kit-sub/tls/current/fullchain.pem", key: "/etc/kit-sub/tls/current/privkey.pem"}' >"$ks_config"
   fi
-  chmod 600 /etc/kit-sub/config.json
+  chown root:kit-sub "$ks_config"; chmod 0640 "$ks_config"
+  mv -Tf -- "$ks_config" /etc/kit-sub/config.json
   cat >/etc/systemd/system/kit-sub.service <<'UNIT'
 [Unit]
-Description=kit-sub: подписка с учётом приложения (3X-UI KIT)
+Description=kit-sub: app-aware 3X-UI subscription
 After=network-online.target x-ui.service
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/bin/python3 /usr/local/lib/kit-sub/kit_sub.py
+Type=simple
+User=kit-sub
+Group=kit-sub
+ExecStart=/usr/bin/python3 -B /usr/local/lib/kit-sub/kit_sub.py
+Environment=KIT_SUB_CONFIG=/etc/kit-sub/config.json
+WorkingDirectory=/usr/local/lib/kit-sub
 Restart=on-failure
 RestartSec=5
+UMask=0077
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=read-only
+ProtectHome=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-MemoryMax=64M
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryMax=256M
+TasksMax=32
+LimitNOFILE=128
 
 [Install]
 WantedBy=multi-user.target
 UNIT
+  chown root:root /etc/systemd/system/kit-sub.service
+  chmod 0644 /etc/systemd/system/kit-sub.service
   systemctl daemon-reload
+  if [[ $SINGLE != yes ]]; then
+    systemctl enable --now kit-sub-tls-sync.timer >/dev/null 2>&1
+  fi
   systemctl enable kit-sub >/dev/null 2>&1
   systemctl restart kit-sub
   local i
-  local kp=$SUB_PORT
-  [[ $SINGLE == yes ]] && kp=${INNER[sub]}
   for i in $(seq 1 20); do port_busy "$kp" tcp && return 0; sleep 1; done
-  journalctl -u kit-sub -n 20 --no-pager >&2 || true
-  die "kit-sub не запустился — лог выше."
+  die "kit-sub не запустился. Проверьте журнал в приватном root-терминале."
 }
 
 # Ссылки пользователя — из его же подписки (её собирает сама 3X-UI).

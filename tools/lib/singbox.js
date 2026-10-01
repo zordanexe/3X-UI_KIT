@@ -10,6 +10,8 @@
   function tls(p) {
     const s = p.tls;
     if (!s || s.security === 'none') return undefined;
+    // Общий pcs тоже означает pin всего сертификата; игнорирование меняет модель доверия.
+    if (s.security === 'tls' && s.pin) throw new Error('pcs/pinSHA256 не поддерживается генератором sing-box для TLS: проверка сертификата не отключена. Используйте Xray с этим отпечатком или ссылку с доверенным сертификатом без pin.');
     const t = clean({ enabled: true, server_name: s.sni, alpn: s.alpn, insecure: s.insecure || undefined });
     if (s.fp) t.utls = { enabled: true, fingerprint: s.fp };
     if (s.security === 'reality') t.reality = clean({ enabled: true, public_key: s.pbk, short_id: s.sid });
@@ -45,8 +47,10 @@
       case 'ss':
         return { outbound: Object.assign(base, { type: 'shadowsocks', method: p.method, password: p.password }) };
       case 'hysteria2': {
-        // sing-box не умеет закреплять отпечаток сертификата — при pinSHA256 проверку отключаем.
-        const t = clean({ enabled: true, server_name: p.sni, alpn: p.alpn, insecure: (p.insecure || !!p.pinSHA256) || undefined });
+        // pinSHA256 — SHA256 всего сертификата, не SPKI/public-key pin. Не подменяем его insecure.
+        // В поддерживаемом формате sing-box этот pin не представим: отказ даже при insecure=1.
+        if (p.pinSHA256) throw new Error('pinSHA256 не поддерживается генератором sing-box: проверка сертификата не отключена. Используйте Mihomo/Xray с этим отпечатком или ссылку с доверенным сертификатом без pinSHA256.');
+        const t = clean({ enabled: true, server_name: p.sni, alpn: p.alpn, insecure: p.insecure || undefined });
         const o = clean(Object.assign(base, { type: 'hysteria2', password: p.password, tls: t }));
         if (p.obfs) o.obfs = { type: p.obfs, password: p.obfsPassword };
         return { outbound: o };
