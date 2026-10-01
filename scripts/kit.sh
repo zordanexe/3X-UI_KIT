@@ -6,6 +6,24 @@
 #   kit user list | link имя | limit имя [--gb N] [--days N] | off имя | on имя | del имя
 
 set -Eeuo pipefail
+
+# Only run scripts from an operator-authenticated release bundle (see README).
+# This shell gate checks the helper before Python can execute it.
+supply_chain_bootstrap() {
+  local src file expected
+  src=$(readlink -f -- "${BASH_SOURCE[0]}") || { printf '%s\n' 'Cannot resolve bundle script.' >&2; return 1; }
+  [[ -f $src && $src != /dev/* && $src != /proc/* ]] || { printf '%s\n' 'Use an extracted verified release bundle, not curl | bash.' >&2; return 1; }
+  KIT_BUNDLE_ROOT=$(cd -- "$(dirname -- "$src")/.." && pwd -P)
+  [[ -f $KIT_BUNDLE_ROOT/SHA256SUMS && ! -L $KIT_BUNDLE_ROOT/SHA256SUMS && ! -L $KIT_BUNDLE_ROOT/scripts ]] || { printf '%s\n' 'Missing regular bundle SHA256SUMS.' >&2; return 1; }
+  for file in 3x-ui.sh hysteria2.sh kit.sh kit-sub.py supply-chain.py supply-chain.lock.json; do
+    [[ -f $KIT_BUNDLE_ROOT/scripts/$file && ! -L $KIT_BUNDLE_ROOT/scripts/$file ]] || return 1
+    expected=$(awk -v f="scripts/$file" '$2 == f {n++; h=$1} END {if(n != 1 || length(h) != 64 || h ~ /[^0-9a-f]/) exit 1; print h}' "$KIT_BUNDLE_ROOT/SHA256SUMS") || return 1
+    [[ $(sha256sum "$KIT_BUNDLE_ROOT/scripts/$file" | cut -d ' ' -f1) == "$expected" ]] || { printf '%s\n' 'Bundle checksum mismatch.' >&2; return 1; }
+  done
+  (cd -- "$KIT_BUNDLE_ROOT" && sha256sum --check --strict --quiet SHA256SUMS) || return 1
+}
+supply_chain_bootstrap || exit 1
+sc() { python3 -I "$KIT_BUNDLE_ROOT/scripts/supply-chain.py" "$@"; }
 export LC_ALL=C.UTF-8  # ширина колонок по символам, а не байтам
 
 XUI_ENV=/etc/x-ui/install-result.env
@@ -23,6 +41,8 @@ die()  { printf '%s\n' "${R}✗${N}  $*" >&2; exit 1; }
 [[ -f $XUI_ENV && -f $KIT_ENV ]] || die "Не найдена установка — сначала поставьте сервер скриптом 3x-ui.sh."
 # shellcheck disable=SC1090
 . "$XUI_ENV"; . "$KIT_ENV"
+: "${XUI_API_TOKEN:?Missing panel API token}"
+sc verify "$KIT_BUNDLE_ROOT"
 
 API=""
 for scheme in https http; do

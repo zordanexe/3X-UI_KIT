@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Hysteria2 одной командой — https://github.com/itsnotkubrick/3X-UI_KIT
 #
-# Установка:   bash <(curl -fsSL https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/main/scripts/hysteria2.sh)
+# Установка: bash ./scripts/hysteria2.sh из проверенного release bundle secure-v1.0.0 (см. README).
 # Управление:  hy2 help
 #
 # Ставит официальный бинарник Hysteria2 (версия закреплена ниже, контрольная
@@ -10,9 +10,26 @@
 
 set -Eeuo pipefail
 
+# Only run scripts from an operator-authenticated release bundle (see README).
+# This shell gate checks the helper before Python can execute it.
+supply_chain_bootstrap() {
+  local src file expected
+  src=$(readlink -f -- "${BASH_SOURCE[0]}") || { printf '%s\n' 'Cannot resolve bundle script.' >&2; return 1; }
+  [[ -f $src && $src != /dev/* && $src != /proc/* ]] || { printf '%s\n' 'Use an extracted verified release bundle, not curl | bash.' >&2; return 1; }
+  KIT_BUNDLE_ROOT=$(cd -- "$(dirname -- "$src")/.." && pwd -P)
+  [[ -f $KIT_BUNDLE_ROOT/SHA256SUMS && ! -L $KIT_BUNDLE_ROOT/SHA256SUMS && ! -L $KIT_BUNDLE_ROOT/scripts ]] || { printf '%s\n' 'Missing regular bundle SHA256SUMS.' >&2; return 1; }
+  for file in 3x-ui.sh hysteria2.sh kit.sh kit-sub.py supply-chain.py supply-chain.lock.json; do
+    [[ -f $KIT_BUNDLE_ROOT/scripts/$file && ! -L $KIT_BUNDLE_ROOT/scripts/$file ]] || return 1
+    expected=$(awk -v f="scripts/$file" '$2 == f {n++; h=$1} END {if(n != 1 || length(h) != 64 || h ~ /[^0-9a-f]/) exit 1; print h}' "$KIT_BUNDLE_ROOT/SHA256SUMS") || return 1
+    [[ $(sha256sum "$KIT_BUNDLE_ROOT/scripts/$file" | cut -d ' ' -f1) == "$expected" ]] || { printf '%s\n' 'Bundle checksum mismatch.' >&2; return 1; }
+  done
+  (cd -- "$KIT_BUNDLE_ROOT" && sha256sum --check --strict --quiet SHA256SUMS) || return 1
+}
+supply_chain_bootstrap || exit 1
+sc() { python3 -I "$KIT_BUNDLE_ROOT/scripts/supply-chain.py" "$@"; }
+
 HY_VERSION="2.12.3"
 HY_REPO="HyNetworks/hysteria"
-SELF_URL="https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/main/scripts/hysteria2.sh"
 
 BIN=/usr/local/bin/hysteria
 CLI=/usr/local/bin/hy2
@@ -38,10 +55,6 @@ trap 'die "Ошибка в строке $LINENO. Если это установ�
 
 need_root() { [[ $EUID -eq 0 ]] || die "Запустите от root: sudo -i, затем команду ещё раз."; }
 
-# Прежнее имя файла настроек — переносим, чтобы старые установки не сломались.
-if [[ -f $CONF_DIR/pinkman.env && ! -f $STATE && -w $CONF_DIR ]]; then
-  mv "$CONF_DIR/pinkman.env" "$STATE"
-fi
 
 # ---------- проверки ----------
 
@@ -84,33 +97,24 @@ install_packages() {
   say "Ставлю пакеты: curl, openssl, qrencode, ufw"
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
-  apt-get install -y -qq curl openssl qrencode ca-certificates iproute2 ufw >/dev/null
+  apt-get install -y -qq curl openssl qrencode ca-certificates iproute2 ufw python3 >/dev/null
 }
 
 install_binary() {
-  local arch tmp url expected actual
+  local arch tmp binary
   arch=$(detect_arch)
-  url="https://github.com/$HY_REPO/releases/download/app/v$HY_VERSION"
   tmp=$(mktemp -d)
-  say "Скачиваю Hysteria $HY_VERSION ($arch) с GitHub"
-  curl -fsSL --retry 3 -o "$tmp/hysteria" "$url/hysteria-linux-$arch"
-  curl -fsSL --retry 3 -o "$tmp/hashes.txt" "$url/hashes.txt"
-  expected=$(awk -v f="build/hysteria-linux-$arch" '$2==f {print $1}' "$tmp/hashes.txt")
-  actual=$(sha256sum "$tmp/hysteria" | awk '{print $1}')
-  [[ -n $expected && $expected == "$actual" ]] || { rm -rf "$tmp"; die "Контрольная сумма не совпала — файл повреждён или подменён."; }
-  install -m 755 "$tmp/hysteria" "$BIN"
-  rm -rf "$tmp"
-  say "Контрольная сумма совпала: ${D}${actual:0:16}…${N}"
+  ( trap 'rm -rf -- "$tmp"' EXIT
+    binary=$(sc hysteria "$KIT_BUNDLE_ROOT" "$tmp" "$arch") || exit 1
+    install -m 755 "$binary" "$BIN.new" && mv -f -- "$BIN.new" "$BIN"
+  ) || die "Проверка или установка Hysteria не удалась."
+  say "Hysteria $HY_VERSION: закреплённая SHA256 проверена."
 }
 
 install_cli() {
-  # Скрипт копирует сам себя, чтобы работала команда hy2.
-  local src="${BASH_SOURCE[0]}"
-  if [[ -f $src && $src != /dev/fd/* && $src != /proc/* ]]; then
-    install -m 755 "$src" "$CLI"
-  else
-    curl -fsSL --retry 3 -o "$CLI" "$SELF_URL" && chmod 755 "$CLI"
-  fi
+  local bundle
+  bundle=$(sc persist "$KIT_BUNDLE_ROOT" /usr/local/lib/3x-ui-kit) || die "Не удалось сохранить проверенный bundle."
+  ln -sfn -- "$bundle/scripts/hysteria2.sh" "$CLI"
 }
 
 write_masq() {
@@ -423,23 +427,20 @@ cmd_status() {
 
 cmd_update() {
   require_installed
-  local tmp
-  tmp=$(mktemp)
-  say "Скачиваю свежую версию скрипта"
-  curl -fsSL --retry 3 -o "$tmp" "$SELF_URL"
-  bash "$tmp" __update_binary
-  install -m 755 "$tmp" "$CLI"
-  rm -f "$tmp"
+  local bundle=${1:-$KIT_BUNDLE_ROOT} installed
+  [[ -f $bundle/scripts/hysteria2.sh && -f $bundle/SHA256SUMS ]] || die "Укажите распакованный проверенный release bundle."
+  # Snapshot with the current trusted helper before executing any new code.
+  installed=$(sc persist "$bundle" /usr/local/lib/3x-ui-kit) || die "Не удалось сохранить проверенный bundle."
+  bash "$installed/scripts/hysteria2.sh" __update_binary
+  ln -sfn -- "$installed/scripts/hysteria2.sh" "$CLI"
 }
 
 cmd_update_binary() {
   require_installed
-  local cur
-  cur=$("$BIN" version 2>/dev/null | awk '/^Version:/ {print $2}')
-  if [[ $cur == "v$HY_VERSION" ]]; then say "Уже стоит последняя проверенная версия $HY_VERSION."; return; fi
+  # Always verify and replace; never trust an old binary's self-reported version.
   install_binary
   reload_service
-  say "Hysteria обновлена: $cur → v$HY_VERSION"
+  say "Hysteria установлена из проверенного bundle: v$HY_VERSION"
 }
 
 cmd_uninstall() {
@@ -476,7 +477,7 @@ ${B}hy2${N} — управление Hysteria2
   hy2 link [имя]    ссылка и QR-код
   hy2 status        версия, адрес, состояние сервиса
   hy2 restart       перезапустить (например, после исправления DNS)
-  hy2 update        обновить скрипт и Hysteria до проверенной версии
+  hy2 update [bundle] обновить из локального проверенного release bundle (без mutable main)
   hy2 uninstall     удалить всё
 
 Параметры установки (для запуска без вопросов):
@@ -491,6 +492,10 @@ EOF
 }
 
 main() {
+  # Preserve the legacy migration only for root management commands.
+  if [[ $EUID -eq 0 && -f $CONF_DIR/pinkman.env && ! -f $STATE && -w $CONF_DIR ]]; then
+    mv "$CONF_DIR/pinkman.env" "$STATE"
+  fi
   local cmd=${1:-}
   case $cmd in
     add|del|list|link|status|restart|update|uninstall|help) shift; "cmd_$cmd" "$@" ;;
