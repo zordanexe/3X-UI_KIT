@@ -35,6 +35,27 @@
     return v === '1' || v === 'true' || v === 'True';
   }
 
+  // SHA256 всего DER-сертификата, не SPKI/base64 pin: 32 байта hex.
+  // Проверяем наличие query-параметра ДО нормализации: пустой pin не означает отсутствие pin.
+  function certificatePin(q, multiple) {
+    let pin = '';
+    ['pcs', 'pinSHA256'].forEach((name) => {
+      q.getAll(name).forEach((value) => {
+        // Xray pcs принимает список, Hysteria/Mihomo — ровно один отпечаток.
+        const values = name === 'pcs' && multiple ? value.split(',').map((v) => v.trim()) : [value];
+        const normalized = values.map((v) => {
+          const valid = /^[a-f0-9]{64}$/i.test(v) || /^(?:[a-f0-9]{2}:){31}[a-f0-9]{2}$/i.test(v) ||
+            name === 'pinSHA256' && /^(?:[a-f0-9]{2}-){31}[a-f0-9]{2}$/i.test(v);
+          if (!valid) throw new Error(name + ': неверный SHA256 отпечаток сертификата — нужны 32 байта hex');
+          return v.replace(/[:-]/g, '').toLowerCase();
+        }).join(',');
+        if (pin && pin !== normalized) throw new Error('pcs/pinSHA256: конфликтующие отпечатки сертификата');
+        pin = normalized;
+      });
+    });
+    return pin;
+  }
+
   // Разбор адреса «хост:порт» из URL: поддерживает IPv6 в квадратных скобках.
   function hostPort(u) {
     const host = u.hostname.replace(/^\[|\]$/g, '');
@@ -72,6 +93,8 @@
     }
 
     const security = (q.get('security') || 'none').toLowerCase();
+    const pin = certificatePin(q, true);
+    if (pin && security !== 'tls') throw new Error('pcs/pinSHA256: отпечаток сертификата требует security=tls');
     const s = { security };
     if (security === 'tls' || security === 'reality') {
       s.sni = dec(q.get('sni') || q.get('peer') || '') || host || fallbackHost;
@@ -79,7 +102,7 @@
       s.alpn = splitList(q.get('alpn'));
       s.insecure = truthy(q.get('allowInsecure')) || truthy(q.get('insecure'));
       // Отпечаток сертификата: pcs — имя параметра в ссылках Xray 26, pinSHA256 — в ссылках Hysteria.
-      s.pin = (q.get('pcs') || q.get('pinSHA256') || '').replace(/:/g, '').toLowerCase();
+      s.pin = pin;
     }
     if (security === 'reality') {
       s.pbk = q.get('pbk') || '';
@@ -190,7 +213,7 @@
       type: 'hysteria2', name: dec(u.hash.slice(1)), password: auth,
       sni: dec(q.get('sni') || '') || hp.server,
       insecure: truthy(q.get('insecure')),
-      pinSHA256: (q.get('pinSHA256') || '').replace(/:/g, '').toLowerCase(),
+      pinSHA256: certificatePin(q),
       obfs, obfsPassword: dec(q.get('obfs-password') || ''),
       alpn: splitList(q.get('alpn')),
     }, hp);

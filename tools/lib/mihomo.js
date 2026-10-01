@@ -100,6 +100,8 @@
   function tlsOpts(p, o, sniKey) {
     const s = p.tls;
     if (s.security === 'none') { o.tls = false; return; }
+    // Для общего pcs пока нет проверенного отображения в этом генераторе; не теряем pin молча.
+    if (s.security === 'tls' && s.pin) throw new Error('pcs/pinSHA256 не поддерживается генератором Mihomo для TLS: проверка сертификата не отключена. Используйте Xray с этим отпечатком или ссылку с доверенным сертификатом без pin.');
     o.tls = true;
     o[sniKey] = s.sni;
     o['client-fingerprint'] = s.fp || undefined;
@@ -177,11 +179,17 @@
       .filter((d) => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(d));
   }
 
-  // opts: services[], subscription, perService, finalProxy, blockAds, blockQuic, proxyDomains, directDomains
+  // opts: services[], subscription, perService, finalProxy, blockAds, blockQuic, proxyDomains, directDomains,
+  // externalUI: локальная папка только вручную предустановленной/проверенной панели; по умолчанию выключена.
   function build(proxies, opts) {
     opts = opts || {};
     const services = SERVICES.filter((s) => (opts.services || SERVICES.filter((x) => x.on).map((x) => x.id)).includes(s.id));
     if (!proxies.length && !opts.subscription) throw new Error('Добавьте хотя бы одну ссылку или подписку.');
+    const externalUI = opts.externalUI === undefined ? '' : opts.externalUI;
+    if (typeof externalUI !== 'string' || externalUI &&
+        (!/^(?:\.\/|\/)?[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(externalUI) || externalUI.split('/').includes('..'))) {
+      throw new Error('externalUI: нужна локальная папка вручную предустановленной панели, не URL.');
+    }
 
     const cfg = {
       'log-level': 'warning',
@@ -191,10 +199,12 @@
       'routing-mark': 255,
       'find-process-mode': 'off',
       'unified-delay': true,
-      'external-controller': '0.0.0.0:9090',
+      'external-controller': '127.0.0.1:9090',
       secret: opts.secret || randomSecret(),
-      'external-ui': 'zashboard',
-      'external-ui-url': 'https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip',
+      'external-ui': externalUI,
+      // Явное пустое значение: без этого Mihomo 1.19 наследует URL mutable metacubexd.
+      // Даже при отсутствующей локальной папке не скачиваем исполняемый JS из сети.
+      'external-ui-url': '',
       sniffer: {
         enable: true,
         sniff: { HTTP: { __flow: 1, ports: [80, 8080] }, TLS: { __flow: 1, ports: [443, 8443] }, QUIC: { __flow: 1, ports: [443, 8443] } },
@@ -253,7 +263,11 @@
 
     const head = '# Сгенерировано: https://itsnotkubrick.github.io/3X-UI_KIT/tools/mihomo/\n' +
       '# Файл для XKeen: /opt/etc/mihomo/config.yaml, затем xkeen -restart\n' +
-      '# Панель управления: http://IP-роутера:9090/ui (секрет — поле secret ниже)\n';
+      '# Контроллер: 127.0.0.1:9090 (секрет — поле secret ниже); для доступа используйте SSH-туннель:\n' +
+      '# ssh -L 9090:127.0.0.1:9090 root@IP-роутера -p 222; локальный адрес http://127.0.0.1:9090\n' +
+      (externalUI ? '# Панель: только вручную предустановленная и проверенная локальная папка; адрес через туннель http://127.0.0.1:9090/ui\n' :
+        '# Панель выключена; опция externalUI включает только вручную предустановленную и проверенную локальную папку.\n') +
+      '# Автозагрузка кода панели отключена; наборы правил — динамические данные, обновляются с указанных URL.\n';
     return { yaml: head + yaml(cfg).replace(/^\n/, ''), config: cfg, count: proxies.length };
   }
 

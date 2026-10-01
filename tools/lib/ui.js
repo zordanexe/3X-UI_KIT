@@ -54,16 +54,30 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
-  // Команда для SSH: записывает файлы и перезапускает XKeen.
+  // Команда для SSH: приватные временные файлы, атомарная замена и перезапуск XKeen.
   function routerCommand(files, dir, switchCmd) {
-    const parts = ['# Вставьте целиком в SSH-консоль роутера (Entware)', '# ' + switchCmd + '   ← раскомментируйте, если сейчас работает другое ядро', 'mkdir -p ' + dir];
+    const quote = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
+    // POSIX test работает и в старом BusyBox без mv -T. Симлинки не принимаем, даже битые.
+    const checkTarget = (name) => {
+      const target = quote(dir + '/' + name);
+      return 'if [ -d ' + target + ' ] || [ -L ' + target + ' ]; then printf \'%s\\n\' ' +
+        quote('Отказ: файл конфигурации является каталогом или симлинком: ' + dir + '/' + name) + ' >&2; exit 1; fi';
+    };
+    // Подоболочка не меняет umask/опции пользовательской SSH-сессии. Ошибка записи/прав — без перезапуска.
+    const parts = ['# Вставьте целиком в SSH-консоль роутера (Entware)', '# ' + switchCmd + '   ← раскомментируйте, если сейчас работает другое ядро',
+      '(', 'set -eu', 'umask 077', 'mkdir -p ' + quote(dir), "PM_TMP=''", 'trap \'[ -z "$PM_TMP" ] || rm -f "$PM_TMP"\' 0'];
+    // Проверяем все назначения до записи первого файла: заранее известный отказ не оставляет частичный набор.
+    Object.keys(files).forEach((name) => parts.push(checkTarget(name)));
     Object.keys(files).forEach((name) => {
-      let body = files[name];
+      const body = files[name];
       let tag = 'PMEOF';
       while (body.includes(tag)) tag += 'X';
-      parts.push("cat > " + dir + '/' + name + " <<'" + tag + "'\n" + body.replace(/\n?$/, '\n') + tag);
+      // Не пишем поверх старого inode: его режим может быть 0644 или это может быть симлинк.
+      parts.push('PM_TMP=$(mktemp ' + quote(dir + '/.pm-config.XXXXXX') + ')', 'chmod 600 "$PM_TMP"',
+        "cat > \"$PM_TMP\" <<'" + tag + "'\n" + body.replace(/\n?$/, '\n') + tag,
+        checkTarget(name), 'mv -f "$PM_TMP" ' + quote(dir + '/' + name), "PM_TMP=''");
     });
-    parts.push('xkeen -restart');
+    parts.push('xkeen -restart', ')');
     return parts.join('\n') + '\n';
   }
 

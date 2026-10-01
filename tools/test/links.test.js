@@ -13,7 +13,7 @@ const VMESS = 'vmess://' + Buffer.from(JSON.stringify({ v: '2', ps: 'vm', add: '
 const SS_B64 = 'ss://' + Buffer.from('chacha20-ietf-poly1305:secret').toString('base64url') + '@198.51.100.7:8388#ss';
 const SS_2022 = 'ss://2022-blake3-aes-128-gcm:YctPZ6U7xPPcU%2Bgp3u%2B0tx%2FtRizJN9K8y%2BuKlW2qjlI%3D@198.51.100.8:443#ss22';
 const SS_OLD = 'ss://' + Buffer.from('aes-256-gcm:pw@198.51.100.9:1234').toString('base64') + '#old';
-const HY2 = 'hy2://admin:9c1e5b@hy.example.com:443/?sni=hy.example.com&insecure=1&pinSHA256=AB:CD:EF&obfs=salamander&obfs-password=x#hy';
+const HY2 = 'hy2://admin:9c1e5b@hy.example.com:443/?sni=hy.example.com&insecure=1&pinSHA256=' + 'AB:'.repeat(31) + 'AB&obfs=salamander&obfs-password=x#hy';
 
 test('REALITY', () => {
   const p = parseLink(REALITY);
@@ -52,7 +52,7 @@ test('Shadowsocks во всех трёх форматах', () => {
 test('Hysteria2: логин:пароль и отпечаток', () => {
   const h = parseLink(HY2);
   assert.equal(h.password, 'admin:9c1e5b');
-  assert.equal(h.pinSHA256, 'abcdef');
+  assert.equal(h.pinSHA256, 'ab'.repeat(32));
   assert.equal(h.obfs, 'salamander');
 });
 
@@ -114,8 +114,8 @@ test('Xray 26: вместо allowInsecure — отпечаток или пред
   const r = buildXray(parseText(insecure).proxies, {});
   assert.ok(!JSON.stringify(r.files).includes('allowInsecure'));
   assert.equal(r.warnings.length, 1);
-  const pinned = buildXray(parseText(WS_TLS.replace('#', '&pcs=AB:CD#')).proxies, {});
-  assert.equal(pinned.files['04_outbounds.json'].outbounds[0].streamSettings.tlsSettings.pinnedPeerCertSha256, 'abcd');
+  const pinned = buildXray(parseText(WS_TLS.replace('#', '&pcs=' + 'AB:'.repeat(31) + 'AB#')).proxies, {});
+  assert.equal(pinned.files['04_outbounds.json'].outbounds[0].streamSettings.tlsSettings.pinnedPeerCertSha256, 'ab'.repeat(32));
   assert.equal(pinned.warnings.length, 0);
 });
 
@@ -135,6 +135,6 @@ test('Mihomo: порты XKeen и прокси', () => {
   assert.equal(r.config['tproxy-port'], 5001);
   assert.equal(r.config['routing-mark'], 255);
   assert.equal(r.config.proxies.length, 3);
-  assert.equal(r.config.proxies[1].fingerprint, 'abcdef');
+  assert.equal(r.config.proxies[1].fingerprint, 'ab'.repeat(32));
   assert.match(r.yaml, /name: "Германия"/);
 });

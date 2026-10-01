@@ -113,7 +113,7 @@
         '<ol class="how"><li>Подключитесь к роутеру: <code>ssh root@192.168.1.1 -p 222</code></li>' +
         '<li>Если XKeen сейчас работает на Xray, сначала выполните <code>xkeen -mihomo</code></li>' +
         '<li>Вставьте команду целиком и нажмите Enter — конфиг запишется, XKeen перезапустится.</li>' +
-        '<li>Панель управления: <code>http://192.168.1.1:9090/ui</code>, секрет: <code id="sec"></code></li></ol>';
+        '<li>Controller слушает только localhost. Доступ: <code>ssh -N -L 19090:127.0.0.1:9090 root@192.168.1.1 -p 222</code>, затем <code>http://127.0.0.1:19090</code>. Dashboard не скачивается автоматически: используйте заранее проверенную локальную UI. Секрет: <code id="sec"></code></li></ol>';
       UI.tabs($('#tabs'), (t) => { tab = t; show(); });
       $('#cp').onclick = (e) => UI.copy($('#out').textContent, e.target);
       $('#dl').onclick = () => UI.download('config.yaml', yaml);
