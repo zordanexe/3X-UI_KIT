@@ -6,7 +6,8 @@ API="http://127.0.0.1:$XUI_PANEL_PORT/$XUI_WEB_BASE_PATH/panel/api"
 H=(-H "Authorization: Bearer $XUI_API_TOKEN" -H 'Content-Type: application/json')
 mkdir -p /root/cert
 [[ -f /root/cert/crt ]] || openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /root/cert/key -out /root/cert/crt -subj /CN=test.pm -addext subjectAltName=DNS:test.pm -days 365 2>/dev/null
-chmod 644 /root/cert/*
+chmod 600 /root/cert/key
+chmod 644 /root/cert/crt
 uuid() { cat /proc/sys/kernel/random/uuid; }
 b64k() { openssl rand -base64 "$1"; }
 cb() { jq -nc --arg e "$1" '{email:$e, limitIp:0, totalGB:0, expiryTime:0, enable:true, tgId:0, subId:$e, comment:"", reset:0}'; }
