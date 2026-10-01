@@ -27,7 +27,9 @@
 Подключитесь к серверу по SSH и выполните:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/main/scripts/hysteria2.sh)
+# Сначала скачать bundle secure-v1.0.0 и проверить обе SHA256SUMS по README.
+# Из корня проверенного bundle на целевом Linux VPS:
+sudo bash scripts/hysteria2.sh
 ```
 
 ![Установка Hysteria2](assets/script-hysteria2.svg)

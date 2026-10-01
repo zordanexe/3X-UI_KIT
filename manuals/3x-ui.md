@@ -59,10 +59,12 @@
 Подключитесь к серверу по SSH и выполните:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/main/scripts/3x-ui.sh)
+# Сначала скачать bundle secure-v1.0.0 и проверить обе SHA256SUMS по README.
+# Из корня проверенного bundle на целевом Linux VPS:
+sudo bash scripts/3x-ui.sh
 ```
 
-Через пару минут скрипт покажет всё нужное:
+Через пару минут скрипт сохранит всё нужное в root-only `/root/3x-ui.txt` (0600), без credentials/QR в terminal:
 
 ![Результат установки 3X-UI](assets/script-3x-ui.svg)
 

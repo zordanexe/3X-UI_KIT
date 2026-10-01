@@ -54,18 +54,16 @@
 
 ## 4. Установите XKeen
 
-Подключитесь по SSH и выполните:
+XKeen/Entware — отдельная сторонняя установка на роутере, **не часть проверенного VPS release**.
+Не исполняйте `curl` output через shell. Скачайте конкретный release/commit из
+[upstream](https://github.com/jameszeroX/XKeen), проверьте hash из независимо доверенного
+источника и содержимое всех последующих downloads, затем запускайте локальный файл.
+Одного pin bootstrap недостаточно: его дочерние загрузки ядер/скриптов также требуют проверки.
+В этом fork router installer не запускался и cryptographic provenance Entware/XKeen не подтверждён;
+до отдельного аудита инструкция не даёт готовой root-install команды.
 
-```bash
-opkg update && opkg upgrade && opkg install curl tar && cd /tmp
-sh -c "$(curl -sSL https://raw.githubusercontent.com/jameszeroX/XKeen/main/install.sh)"
-```
-
-Если GitHub недоступен, замените адрес на
-`https://cdn.jsdelivr.net/gh/jameszeroX/XKeen@main/install.sh`.
-
-Установщик спросит ядро (Xray или Mihomo), геобазы, нужно ли исключать
-российские IP и добавлять XKeen в автозагрузку.
+Возможности XKeen (выбор Xray/Mihomo, геобазы и автозагрузка) сохранены upstream;
+это предупреждение о границе доверия, не удаление генераторов KIT.
 
 ## 5. Подключите свой сервер
 
@@ -76,10 +74,10 @@ sh -c "$(curl -sSL https://raw.githubusercontent.com/jameszeroX/XKeen/main/insta
 1. `04_outbounds.json` — подключение к вашему серверу.
 2. `05_routing.json` — какие сайты и сервисы пускать через прокси.
 
-Оба файла собирает наш **[генератор Xray](https://itsnotkubrick.github.io/3X-UI_KIT/tools/xray/)**:
+Оба файла собирает наш **[генератор Xray](../tools/xray/index.html)**:
 вставьте ссылку `vless://`, отметьте сервисы — и получите одну команду,
 которая сама запишет файлы на роутер и перезапустит XKeen. Для ядра Mihomo
-и ссылок Hysteria2 есть **[генератор Mihomo](https://itsnotkubrick.github.io/3X-UI_KIT/tools/mihomo/)**.
+и ссылок Hysteria2 есть **[генератор Mihomo](../tools/mihomo/index.html)**.
 
 > [!NOTE]
 > Генераторы работают прямо в браузере — ссылки с паролями никуда не отправляются.

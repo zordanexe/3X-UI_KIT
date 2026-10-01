@@ -45,16 +45,31 @@
 
 ## Установка
 
-Подключитесь к серверу по SSH и выполните:
+Security-hardened fork основан на [itsnotkubrick/3X-UI_KIT](https://github.com/itsnotkubrick/3X-UI_KIT); исходное авторство сохранено.
+**Не исполняйте сетевой поток и не устанавливайте из mutable main.** На предназначенном для VPN Linux VPS скачайте проверенный bundle:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/main/scripts/3x-ui.sh)
+set -euo pipefail
+mkdir kit-secure-v1.0.0 && cd kit-secure-v1.0.0
+curl --proto '=https' --tlsv1.2 -fSLO https://github.com/zordanexe/3X-UI_KIT/releases/download/secure-v1.0.0/3X-UI_KIT-secure-v1.0.0.tar.gz
+curl --proto '=https' --tlsv1.2 -fSLO https://github.com/zordanexe/3X-UI_KIT/releases/download/secure-v1.0.0/SHA256SUMS
+# Сначала сверить hash archive с независимо доверенным release record.
+sha256sum --check --ignore-missing SHA256SUMS
+tar -xzf 3X-UI_KIT-secure-v1.0.0.tar.gz
+cd 3X-UI_KIT-secure-v1.0.0
+sha256sum --check SHA256SUMS
+# Только после ОБЕИХ успешных проверок; запуск только на целевом Linux VPS:
+sudo bash scripts/3x-ui.sh
 ```
 
-Через пару минут скрипт покажет адрес панели, логин, пароль и подписку с QR-кодом.
-Подробно — подключение приложений, дополнительные пользователи и параметры —
-в **[инструкции](manuals/3x-ui.md)**. Нужен только Hysteria2 — есть
-[отдельный скрипт](manuals/hysteria2.md).
+При любой ошибке проверки остановитесь. Отдельные scripts в assets удобны для просмотра,
+но installer требует согласованный локальный bundle. SHA256SUMS с того же GitHub —
+контроль целостности, не независимая подпись. Доверенные pins/hashes внутренних и внешних
+компонентов описаны в [Supply-chain security](SUPPLY_CHAIN_NOTES.md).
+
+Скрипт сохраняет credentials и subscription в root-only `/root/3x-ui.txt` (0600 root:root), не печатая их/QR в terminal; читайте файл только приватно на VPS.
+Подробно — в **[инструкции](manuals/3x-ui.md)**. Нужен только Hysteria2 — используйте
+тот же проверенный bundle и локально `sudo bash scripts/hysteria2.sh`, см. [инструкцию](manuals/hysteria2.md).
 
 > [!WARNING]
 > Проект создан в образовательных целях. Убедитесь, что ваши действия
@@ -64,13 +79,15 @@ bash <(curl -fsSL https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/main
 
 Вставьте ссылку на сервер или подписку, отметьте нужные сервисы — и получите
 готовый конфиг и одну команду, которая сама положит его на роутер.
-Всё считается в браузере, ссылки никуда не отправляются.
+Всё считается в браузере, ссылки никуда не отправляются. Для hardened версии откройте
+`tools/xray/index.html` или `tools/mihomo/index.html` **локально из проверенного release bundle**;
+GitHub показывает source HTML, а upstream-hosted генераторы не содержат этих исправлений.
 Как поставить XKeen на роутер — в [инструкции для Keenetic](manuals/xkeen-keenetic.md).
 
 | | Генератор | Что получится |
 |---|---|---|
-| ⚙️ | [Xray](https://itsnotkubrick.github.io/3X-UI_KIT/tools/xray/) | `04_outbounds.json` и `05_routing.json`: серверы, выбор сервисов, реклама, свои сайты |
-| 🧩 | [Mihomo](https://itsnotkubrick.github.io/3X-UI_KIT/tools/mihomo/) | `config.yaml` с автовыбором сервера, подпиской, Hysteria2, AmneziaWG и веб-панелью |
+| ⚙️ | [Xray](tools/xray/index.html) | `04_outbounds.json` и `05_routing.json`: серверы, выбор сервисов, реклама, свои сайты |
+| 🧩 | [Mihomo](tools/mihomo/index.html) | `config.yaml` с автовыбором сервера, подпиской, Hysteria2, AmneziaWG и веб-панелью |
 
 ## Полезное
 
@@ -90,6 +107,34 @@ bash <(curl -fsSL https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/main
 | USDT (TRC-20) | `TS83ViXrdezUpp1eFadqj1rBhGLZaba1c1` |
 | TON | `UQBchO4XFPwF9MMa_tjXpwqTo8IL2FhUDyllhYuFo8WM-Qbf` |
 | Ethereum (ERC-20) | `0xC06F6B3A029d7Ea00705B7028490744e2BC16799` |
+
+## Security model
+
+Root installer управляет Linux VPS; kit-sub — отдельная минимально привилегированная служба. Проверки на Windows статические/локальные, не подтверждают успешную установку на Ubuntu/Debian. [Trust boundaries и остаточные риски](docs/SECURITY_MODEL.md).
+
+## Supply-chain security
+
+Локальный согласованный release bundle + SHA256, reviewed pins внешнего executable code. Dynamic APT/rulesets отделены от code trust. [Pins и provenance](SUPPLY_CHAIN_NOTES.md).
+
+## Secrets
+
+**SUBSCRIPTION URL = SECRET / BEARER CREDENTIAL.** Не публикуйте URL, QR, private keys, screenshots и логи в публичных chats/issues. При утечке отключите/удалите пользователя и перевыпустите protocol credentials. [Хранение и отзыв](docs/SECURITY_MODEL.md#secrets).
+
+## External connections
+
+Public-IP lookups раскрывают IP сервера; REALITY SNI probes — IP и TLS handshake; ACME — адрес и challenge. Analytics не добавлены. [Inventory URL/domain и назначения](docs/EXTERNAL_CONNECTIONS.md).
+
+## Hardening
+
+Optional panel-only IP allowlist или SSH tunnel, без обязательного Tailscale и без ограничения subscription location. [Настройка, acceptance и rollback](docs/SECURITY_MODEL.md#hardening-admin-panel-optional-manual-deployment-mode). Перед commit локально `bash scripts/security-check.sh` (без upload source третьим сторонам).
+
+## Upstream
+
+Based on / fork of: [itsnotkubrick/3X-UI_KIT](https://github.com/itsnotkubrick/3X-UI_KIT). Исходные авторство, история и благодарности сохранены. Этот fork не заявляет авторство upstream; PR в upstream не открывается автоматически.
+
+## License status
+
+На момент fork (upstream `4f1e5d98ccd0e34083e844ed7f4c0849658be7dd`) явная LICENSE для 3X-UI_KIT не обнаружена. Новая лицензия для чужого кода не добавлена; это официальный GitHub fork, не standalone relicensed project. У сторонних компонентов собственные лицензии: 3X-UI GPL-3.0, Xray MPL-2.0, Hysteria MIT, Mihomo MIT (подтверждено GitHub license API). Это не лицензирует сам KIT.
 
 ## Благодарности
 
